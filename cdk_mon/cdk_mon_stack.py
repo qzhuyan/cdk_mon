@@ -43,28 +43,56 @@ class CdkMonStack(cdk.Stack):
         # security group
         sg = ec2.SecurityGroup(self, id = 'sg_int', vpc = vpc)
         self.sg = sg
+        
+        cluster = ecs.Cluster(self, "Monitoring", vpc=vpc)
         task = ecs.FargateTaskDefinition(self,
                                          id = 'MonitorTask',
                                          cpu = 512,
                                          memory_limit_mib = 2048
                                          #volumes = [ecs.Volume(name = cfgVolName)]
         )
+        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(9100), 'prometheus node exporter')
+        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(9091), 'prometheus pushgateway')
+        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(3000), 'grafana')
+
 
         # Create NLB
         nlb = elb.NetworkLoadBalancer(self, "nlb",
                                       vpc=vpc,
-                                      internet_facing=False,
+                                      internet_facing=True,
                                       cross_zone_enabled=True,
                                       load_balancer_name="nlb")
 
         self.nlb = nlb
         # ECS Cluster
-        cluster = ecs.Cluster(self, "Monitoring", vpc=vpc)
+        with open("./user_data/prometheus.yml") as f:
+                prometheus_config = f.read()
+
+        task.add_volume(name = 'prom_config')
+        c_config = task.add_container('config-prometheus',
+                                       image=ecs.ContainerImage.from_registry('bash'),                                       
+                                       essential=False,
+                                       logging = ecs.LogDriver.aws_logs(stream_prefix="mon_config_prometheus"),
+                                       command = [ "-c "
+                                                 "echo $DATA | base64 -d - | tee /tmp/private/prometheus.yml"
+                                                 ],
+                                       environment = {'DATA' : cdk.Fn.base64(prometheus_config)}
+
+        )
+        c_config.add_mount_points(ecs.MountPoint(read_only = False, container_path='/tmp/private', source_volume='prom_config'))
         c_prometheus = task.add_container('prometheus',
                                           essential=False,
                                           image=ecs.ContainerImage.from_registry('prom/prometheus'),
-                                          port_mappings = [ecs.PortMapping(container_port=9090)]
+                                          port_mappings = [ecs.PortMapping(container_port=9090)],
+                                          command = [ "-config.file=/etc/prometheus/private/prometheus.yml", \
+                                                      "-storage.local.path=/prometheus", \
+                                                      "-web.console.libraries=/etc/prometheus/console_libraries", \
+                                                      "-web.console.templates=/etc/prometheus/consoles"
+                                          ]
         )
+        c_prometheus.add_mount_points(ecs.MountPoint(read_only = False, container_path='/etc/prometheus/private', source_volume='prom_config'))
+        c_prometheus.add_container_dependencies(ecs.ContainerDependency(container=c_config, condition=ecs.ContainerDependencyCondition.COMPLETE))
+
 
         c_pushgateway = task.add_container('pushgateway',
                                            essential=False,
@@ -74,7 +102,7 @@ class CdkMonStack(cdk.Stack):
 
         c_grafana = task.add_container('grafana',
                                        essential=True,
-                                       image=ecs.ContainerImage.from_registry('prom/prometheus'),
+                                       image=ecs.ContainerImage.from_registry('grafana/grafana'),
                                        port_mappings = [ecs.PortMapping(container_port=3000)]
         )
 
@@ -82,7 +110,9 @@ class CdkMonStack(cdk.Stack):
                                      security_group = self.sg,
                                      cluster = cluster,
                                      task_definition = task,
-                                     desired_count = 1
+                                     desired_count = 1,
+                                     assign_public_ip = True
+
         )
 
         listenerGrafana = self.nlb.add_listener('grafana', port = 3000);
