@@ -1,4 +1,5 @@
 from aws_cdk import (core as cdk, aws_ec2 as ec2, aws_ecs as ecs,
+                    aws_logs as aws_logs,
                     aws_elasticloadbalancingv2 as elb,
                      aws_ecs_patterns as ecs_patterns)
 
@@ -8,6 +9,7 @@ from aws_cdk import (core as cdk, aws_ec2 as ec2, aws_ecs as ecs,
 # with examples from the CDK Developer's Guide, which are in the process of
 # being updated to use `cdk`.  You may delete this import if you don't need it.
 from aws_cdk import core
+from aws_cdk.aws_logs import LogRetention, RetentionDays
 
 
 class CdkMonStack(cdk.Stack):
@@ -72,9 +74,11 @@ class CdkMonStack(cdk.Stack):
         c_config = task.add_container('config-prometheus',
                                        image=ecs.ContainerImage.from_registry('bash'),                                       
                                        essential=False,
-                                       logging = ecs.LogDriver.aws_logs(stream_prefix="mon_config_prometheus"),
-                                       command = [ "-c "
-                                                 "echo $DATA | base64 -d - | tee /tmp/private/prometheus.yml"
+                                       logging = ecs.LogDriver.aws_logs(stream_prefix="mon_config_prometheus",
+                                                                        log_retention = aws_logs.RetentionDays.ONE_DAY
+                                       ),
+                                       command = [ "-c",
+                                                   "echo $DATA | base64 -d - | tee /tmp/private/prometheus.yml"
                                                  ],
                                        environment = {'DATA' : cdk.Fn.base64(prometheus_config)}
 
@@ -84,11 +88,14 @@ class CdkMonStack(cdk.Stack):
                                           essential=False,
                                           image=ecs.ContainerImage.from_registry('prom/prometheus'),
                                           port_mappings = [ecs.PortMapping(container_port=9090)],
-                                          command = [ "-config.file=/etc/prometheus/private/prometheus.yml", \
-                                                      "-storage.local.path=/prometheus", \
-                                                      "-web.console.libraries=/etc/prometheus/console_libraries", \
-                                                      "-web.console.templates=/etc/prometheus/consoles"
-                                          ]
+                                          command = [ "--config.file=/etc/prometheus/private/prometheus.yml", 
+                                                      "--storage.local.path=/prometheus", 
+                                                      "--web.console.libraries=/etc/prometheus/console_libraries", 
+                                                      "--web.console.templates=/etc/prometheus/consoles"],
+                                          logging = ecs.LogDriver.aws_logs(stream_prefix="mon_prometheus",
+                                                                        log_retention = aws_logs.RetentionDays.ONE_DAY
+                                          ),
+                                          
         )
         c_prometheus.add_mount_points(ecs.MountPoint(read_only = False, container_path='/etc/prometheus/private', source_volume='prom_config'))
         c_prometheus.add_container_dependencies(ecs.ContainerDependency(container=c_config, condition=ecs.ContainerDependencyCondition.COMPLETE))
