@@ -88,10 +88,12 @@ class CdkMonStack(cdk.Stack):
                                           essential=False,
                                           image=ecs.ContainerImage.from_registry('prom/prometheus'),
                                           port_mappings = [ecs.PortMapping(container_port=9090)],
-                                          command = [ "--config.file=/etc/prometheus/private/prometheus.yml", 
-                                                      "--storage.local.path=/prometheus", 
-                                                      "--web.console.libraries=/etc/prometheus/console_libraries", 
-                                                      "--web.console.templates=/etc/prometheus/consoles"],
+                                          command = [
+                                              "--config.file=/etc/prometheus/private/prometheus.yml",
+                                              "--storage.tsdb.path=/prometheus",
+                                              "--web.console.libraries=/usr/share/prometheus/console_libraries",
+                                              "--web.console.templates=/usr/share/prometheus/consoles"
+                                          ],
                                           logging = ecs.LogDriver.aws_logs(stream_prefix="mon_prometheus",
                                                                         log_retention = aws_logs.RetentionDays.ONE_DAY
                                           ),
